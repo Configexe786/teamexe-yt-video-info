@@ -1,77 +1,77 @@
 from flask import Flask, request, jsonify
 import requests
-import re
-import json
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-def scrape_youtube(url):
+def capture_from_toolsoverflow(yt_url):
+    target_site = "https://www.toolsoverflow.com/youtube/youtube-title-description-extractor"
+    
+    # ToolOverflow ko request bhejna
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+        "Referer": target_site
     }
+    
     try:
-        # Direct YouTube page se data capture karna
-        response = requests.get(url, headers=headers, timeout=15)
-        html = response.text
+        # Step 1: ToolOverflow ke backend ko simulate karna
+        # Note: Ye site aksar POST request leti hai data dikhane ke liye
+        session = requests.Session()
+        res = session.post(target_site, data={"url": yt_url}, headers=headers, timeout=20)
         
-        # Metadata capture logic
-        json_data = re.search(r'var ytInitialData = (\{.*?\});', html)
-        if not json_data:
-            return None
-            
-        data = json.loads(json_data.group(1))
-        
-        # Data paths extraction
-        contents = data['contents']['twoColumnWatchNextResults']['results']['results']['contents']
-        primary = contents[0]['videoPrimaryInfoRenderer']
-        secondary = contents[1]['videoSecondaryInfoRenderer']
+        if res.status_code != 200:
+            # Agar POST fail ho toh GET try karte hain (kuch sites URL params leti hain)
+            res = session.get(f"{target_site}?url={yt_url}", headers=headers, timeout=20)
 
-        # 1. Title capture
-        title = primary['title']['runs'][0]['text']
-        
-        # 2. Views capture
-        views = primary['viewCount']['videoViewCountRenderer']['viewCount']['simpleText']
-        
-        # 3. Likes capture
-        likes = "N/A"
-        try:
-            buttons = primary['videoActions']['menuRenderer']['topLevelButtons']
-            for b in buttons:
-                if 'segmentedLikeDislikeButtonRenderer' in b:
-                    likes = b['segmentedLikeDislikeButtonRenderer']['likeButton']['toggleButtonRenderer']['defaultText']['simpleText']
-        except: pass
+        soup = BeautifulSoup(res.text, 'html.parser')
 
-        # 4. Description capture
-        description = ""
-        try:
-            description = secondary['description']['runs'][0]['text']
-        except: pass
-
-        return {
-            "title": title,
-            "views": views,
-            "likes": likes,
-            "description": description,
-            "status": "Success"
+        # Step 2: Elements capture karna (Based on your screenshots)
+        # Hum generic selectors use karenge jo text content se match karein
+        data = {
+            "title": "Not Found",
+            "description": "Not Found",
+            "views": "0",
+            "likes": "0",
+            "comments": "0"
         }
+
+        # Title aur Description capture
+        textareas = soup.find_all('textarea')
+        if len(textareas) >= 1: data["title"] = textareas[0].get_text(strip=True)
+        if len(textareas) >= 2: data["description"] = textareas[1].get_text(strip=True)
+
+        # Views, Likes, Comments capture (Looking for icons or specific text)
+        stats = soup.find_all(['div', 'span', 'p'], class_=lambda x: x and ('stats' in x or 'count' in x or 'flex' in x))
+        for item in stats:
+            text = item.get_text(strip=True)
+            if 'K' in text or 'M' in text or text.isdigit():
+                if not data["views"] or data["views"] == "0": data["views"] = text
+                elif not data["likes"] or data["likes"] == "0": data["likes"] = text
+                elif not data["comments"] or data["comments"] == "0": data["comments"] = text
+
+        return data
     except Exception as e:
-        return {"status": "Error", "message": str(e)}
+        return {"error": str(e)}
 
 @app.route('/yt-extract')
 def extract():
-    video_url = request.args.get('url')
-    if not video_url:
-        return jsonify({"error": "No URL provided"}), 400
-        
-    data = scrape_youtube(video_url)
-    if data and data['status'] == "Success":
-        return jsonify(data)
-    return jsonify({"error": "Failed to scrape data"}), 500
+    url = request.args.get('url')
+    if not url:
+        return jsonify({"status": "error", "message": "YouTube URL missing"}), 400
+    
+    # ToolOverflow se data capture karna
+    captured_data = capture_from_toolsoverflow(url)
+    
+    return jsonify({
+        "status": "success",
+        "website_source": "toolsoverflow.com",
+        "data": captured_data,
+        "dev": "@Configexe"
+    })
 
 @app.route('/')
 def home():
-    return "<h1>TeamExe YT API is Online!</h1><p>Use /yt-extract?url=LINK</p>"
+    return "<h1>TeamExe ToolOverflow Scraper is Live!</h1>"
 
 app = app
             
