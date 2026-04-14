@@ -2,74 +2,76 @@ from flask import Flask, request, jsonify
 import requests
 import re
 import json
-from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-def extract_yt_data(url):
+def scrape_youtube(url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
     }
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        return None
-
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # YouTube ka internal data dhundna (Title, Views, Description ke liye)
-    # Ye wahi capture logic hai jo screenshots me dikh raha hai
-    data_re = re.compile(r'var ytInitialData = (\{.*?\});')
-    match = data_re.search(response.text)
-    
-    if not match:
-        return None
-    
-    yt_data = json.loads(match.group(1))
-    
-    # Metadata extraction
     try:
-        video_details = yt_data['contents']['twoColumnWatchNextResults']['results']['results']['contents'][0]['videoPrimaryInfoRenderer']
-        video_secondary = yt_data['contents']['twoColumnWatchNextResults']['results']['results']['contents'][1]['videoSecondaryInfoRenderer']
+        # Direct YouTube page se data capture karna
+        response = requests.get(url, headers=headers, timeout=15)
+        html = response.text
         
-        title = video_details['title']['runs'][0]['text']
-        # Views count extraction
-        views = video_details['viewCount']['videoViewCountRenderer']['viewCount']['simpleText']
-        # Likes count
-        likes = video_details.get('videoActions', {}).get('menuRenderer', {}).get('topLevelButtons', [{}])[0].get('segmentedLikeDislikeButtonRenderer', {}).get('likeButton', {}).get('toggleButtonRenderer', {}).get('defaultText', {}).get('simpleText', 'N/A')
-        # Description extraction
-        description = video_secondary['description']['runs'][0]['text'] if 'runs' in video_secondary['description'] else ""
+        # Metadata capture logic
+        json_data = re.search(r'var ytInitialData = (\{.*?\});', html)
+        if not json_data:
+            return None
+            
+        data = json.loads(json_data.group(1))
+        
+        # Data paths extraction
+        contents = data['contents']['twoColumnWatchNextResults']['results']['results']['contents']
+        primary = contents[0]['videoPrimaryInfoRenderer']
+        secondary = contents[1]['videoSecondaryInfoRenderer']
+
+        # 1. Title capture
+        title = primary['title']['runs'][0]['text']
+        
+        # 2. Views capture
+        views = primary['viewCount']['videoViewCountRenderer']['viewCount']['simpleText']
+        
+        # 3. Likes capture
+        likes = "N/A"
+        try:
+            buttons = primary['videoActions']['menuRenderer']['topLevelButtons']
+            for b in buttons:
+                if 'segmentedLikeDislikeButtonRenderer' in b:
+                    likes = b['segmentedLikeDislikeButtonRenderer']['likeButton']['toggleButtonRenderer']['defaultText']['simpleText']
+        except: pass
+
+        # 4. Description capture
+        description = ""
+        try:
+            description = secondary['description']['runs'][0]['text']
+        except: pass
 
         return {
             "title": title,
             "views": views,
             "likes": likes,
-            "comments": "Available via YouTube API", # Comments scraping requires heavy JS
-            "description": description
+            "description": description,
+            "status": "Success"
         }
-    except:
-        return None
+    except Exception as e:
+        return {"status": "Error", "message": str(e)}
 
-@app.route('/yt-info', methods=['GET'])
-def get_info():
+@app.route('/yt-extract')
+def extract():
     video_url = request.args.get('url')
     if not video_url:
-        return jsonify({"status": "error", "message": "Please provide a YouTube URL"}), 400
-
-    data = extract_yt_data(video_url)
-    
-    if data:
-        return jsonify({
-            "status": "success",
-            "capture_details": data,
-            "source": "Direct YouTube Capture",
-            "credits": "@Configexe"
-        })
-    else:
-        return jsonify({"status": "error", "message": "Failed to capture data from YouTube"}), 500
+        return jsonify({"error": "No URL provided"}), 400
+        
+    data = scrape_youtube(video_url)
+    if data and data['status'] == "Success":
+        return jsonify(data)
+    return jsonify({"error": "Failed to scrape data"}), 500
 
 @app.route('/')
 def home():
-    return "<h1>YT Extractor API is Online!</h1><p>Use /yt-info?url=YOUR_URL</p>"
+    return "<h1>TeamExe YT API is Online!</h1><p>Use /yt-extract?url=LINK</p>"
 
 app = app
-  
+            
