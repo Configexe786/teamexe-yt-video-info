@@ -1,77 +1,83 @@
 from flask import Flask, request, jsonify
 import requests
-from bs4 import BeautifulSoup
+import re
+import json
 
 app = Flask(__name__)
 
-def capture_from_toolsoverflow(yt_url):
-    target_site = "https://www.toolsoverflow.com/youtube/youtube-title-description-extractor"
-    
-    # ToolOverflow ko request bhejna
+def get_yt_info(url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-        "Referer": target_site
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9"
     }
-    
     try:
-        # Step 1: ToolOverflow ke backend ko simulate karna
-        # Note: Ye site aksar POST request leti hai data dikhane ke liye
-        session = requests.Session()
-        res = session.post(target_site, data={"url": yt_url}, headers=headers, timeout=20)
+        # YouTube page load karna
+        res = requests.get(url, headers=headers, timeout=15)
+        html = res.text
+
+        # YouTube ka hidden JSON data nikalna
+        json_str = re.search(r'var ytInitialData = (\{.*?\});', html)
+        if not json_str:
+            return None
         
-        if res.status_code != 200:
-            # Agar POST fail ho toh GET try karte hain (kuch sites URL params leti hain)
-            res = session.get(f"{target_site}?url={yt_url}", headers=headers, timeout=20)
+        data = json.loads(json_str.group(1))
 
-        soup = BeautifulSoup(res.text, 'html.parser')
+        # Data paths (Robust extraction)
+        # Title
+        try:
+            title = re.search(r'"title":\{"runs":\[\{"text":"(.*?)"\}\]', html).group(1)
+        except:
+            title = "N/A"
 
-        # Step 2: Elements capture karna (Based on your screenshots)
-        # Hum generic selectors use karenge jo text content se match karein
-        data = {
-            "title": "Not Found",
-            "description": "Not Found",
-            "views": "0",
-            "likes": "0",
-            "comments": "0"
+        # Views
+        try:
+            views = re.search(r'"viewCount":\{"videoViewCountRenderer":\{"viewCount":\{"simpleText":"(.*?)"\}', html).group(1)
+        except:
+            views = "N/A"
+
+        # Likes
+        try:
+            likes = re.search(r'"defaultText":\{"simpleText":"(.*?)"\},"accessibilityText":"(.*?)"\}\},"style":"STYLE_DEFAULT"', html).group(1)
+        except:
+            likes = "N/A"
+
+        # Description
+        try:
+            description = re.search(r'"description":\{"runs":\[\{"text":"(.*?)"\}\]', html).group(1)
+        except:
+            description = "N/A"
+
+        return {
+            "title": title,
+            "views": views,
+            "likes": likes,
+            "description": description.replace('\\n', '\n')[:500] + "...", # Pehle 500 characters
+            "dev_by": "@Configexe"
         }
-
-        # Title aur Description capture
-        textareas = soup.find_all('textarea')
-        if len(textareas) >= 1: data["title"] = textareas[0].get_text(strip=True)
-        if len(textareas) >= 2: data["description"] = textareas[1].get_text(strip=True)
-
-        # Views, Likes, Comments capture (Looking for icons or specific text)
-        stats = soup.find_all(['div', 'span', 'p'], class_=lambda x: x and ('stats' in x or 'count' in x or 'flex' in x))
-        for item in stats:
-            text = item.get_text(strip=True)
-            if 'K' in text or 'M' in text or text.isdigit():
-                if not data["views"] or data["views"] == "0": data["views"] = text
-                elif not data["likes"] or data["likes"] == "0": data["likes"] = text
-                elif not data["comments"] or data["comments"] == "0": data["comments"] = text
-
-        return data
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return None
 
 @app.route('/yt-extract')
-def extract():
-    url = request.args.get('url')
-    if not url:
-        return jsonify({"status": "error", "message": "YouTube URL missing"}), 400
+def main():
+    video_url = request.args.get('url')
+    if not video_url:
+        return jsonify({"status": "error", "message": "URL missing"}), 400
+
+    info = get_yt_info(video_url)
     
-    # ToolOverflow se data capture karna
-    captured_data = capture_from_toolsoverflow(url)
-    
-    return jsonify({
-        "status": "success",
-        "website_source": "toolsoverflow.com",
-        "data": captured_data,
-        "dev": "@Configexe"
-    })
+    if info:
+        return jsonify({
+            "status": "success",
+            "project": "teamexe-yt-video-info",
+            "data": info
+        })
+    else:
+        return jsonify({"status": "error", "message": "Failed to extract. Try again."}), 500
 
 @app.route('/')
 def home():
-    return "<h1>TeamExe ToolOverflow Scraper is Live!</h1>"
+    return "<h1>TeamExe API is 100% Online</h1>"
 
+# For Vercel
 app = app
-            
+    
